@@ -33,6 +33,8 @@ while True:
         cv.imshow("Camera", image)
 
     key = cv.waitKey(1)
+
+    # Press esc to stop the execution
     if key == 27:
         break
 

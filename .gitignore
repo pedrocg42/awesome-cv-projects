@@ -1,3 +1,6 @@
+# Model will not be uploaded to git by default
+**/models
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
