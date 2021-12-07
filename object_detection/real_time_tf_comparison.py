@@ -19,9 +19,16 @@ from utils import (
     download_model_tf_hub,
     getFPS,
     load_tflite_model,
-    plot_text_top_left_height,
+    draw_raw_object_detection_output,
+    draw_text_top_left_height,
     predict_tflite_model,
+    OBJECT_DETECTION_LABELS_COCO_2017,
 )
+
+# load tflite model (press 'l' to switch)
+tflite = False
+# use non-max suppression (press 's' to switch)
+non_max = True
 
 # Selecting our camera
 device = 0
@@ -32,7 +39,7 @@ cam.set(3, 1280)
 cam.set(4, 720)
 
 # Creating window to display
-cv.namedWindow("Camera", cv.WINDOW_NORMAL)
+cv.namedWindow("Object Detection", cv.WINDOW_NORMAL)
 
 # Setting FPS buffer
 BUFFER_SIZE = 100
@@ -46,44 +53,61 @@ models = [
         "model_path": "centernet_resnet50v1_fpn_512x512",
         "hub_path": "https://tfhub.dev/tensorflow/centernet/resnet50v1_fpn_512x512/1",
         "input_shape": (512, 512),
+        "threshold": 0.2,
+        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
     },
     # Load this model pressing number 2 in your keyboard, load  by default
     {
         "name": "ssd320",
+        "model_path": "ssd_mobilenet_v2",
+        "hub_path": "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/2",
+        "input_shape": (320, 320),
+        "threshold": 0.4,
+        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
+    },
+    # Load this model pressing number 3 in your keyboard, load  by default
+    {
+        "name": "ssd320fpn",
         "model_path": "ssd_mobilenet_v2_fpnlite_320x320_1",
         "hub_path": "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/fpnlite_320x320/1",
         "input_shape": (320, 320),
+        "threshold": 0.2,
+        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
     },
-    # Load this model pressing number 3 in your keyboard
+    # Load this model pressing number 4in your keyboard
     {
-        "name": "ssd640",
+        "name": "ssd640fpn",
         "model_path": "ssd_mobilenet_v2_fpnlite_640x640_1",
         "hub_path": "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/fpnlite_640x640/1",
         "input_shape": (640, 640),
+        "threshold": 0.2,
+        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
     },
-    # Load this model pressing number 4 in your keyboard
+    # Load this model pressing number 5 in your keyboard
     {
         "name": "faster-rcnn",
         "model_path": "faster_rcnn_resnet50_v1_640x640",
         "hub_path": "https://tfhub.dev/tensorflow/faster_rcnn/resnet50_v1_640x640/1",
         "input_shape": (640, 640),
+        "threshold": 0.2,
+        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
     },
 ]
 load_model = True
-tflite = True
 
 while True:
 
     if load_model:
         # restarting buffer for fps
         times = np.zeros(BUFFER_SIZE)
+        # initializing models variables
         input_shape = models[model_idx]["input_shape"]
         saved_model_path = os.path.join(
             dir_path, "models", models[model_idx]["model_path"]
         )
         if not tflite:
             print("Loading saved_model...")
-            # If a model is already downloaded it loads it from local, if not from TF hub
+            # if a model is already downloaded it loads it from local, if not from TF hub
             if not os.path.isdir(saved_model_path):
                 model = download_model_tf_hub(models[model_idx], dir_path=dir_path)
             else:
@@ -102,7 +126,7 @@ while True:
                     )
                 # converting model to tflite
                 convert_saved_model_tflite(saved_model_path)
-
+            # loading tflite model
             tflite_model = load_tflite_model(tflite_model_path)
 
         # Turn off flag to load a new model
@@ -121,14 +145,29 @@ while True:
         if not tflite:
             output = model(inference_image)
         else:
-            predict_tflite_model(tflite_model, inference_image)
+            output = predict_tflite_model(tflite_model, inference_image)
+
+        raw_scores = output["detection_scores"].numpy()[0]
+        raw_classes = output["detection_classes"].numpy().astype(int)[0]
+        raw_boxes = output["detection_boxes"].numpy()[0]
+
+        # plotting results in image
+        image = draw_raw_object_detection_output(
+            image,
+            raw_scores,
+            raw_classes,
+            raw_boxes,
+            threshold=models[model_idx]["threshold"],
+            class_dict=models[model_idx]["classes_dict"],
+            non_max=non_max,
+        )
 
         # Getting and printing FPS
         fps = getFPS(times)
-        plot_text_top_left_height(image, f"FPS: {fps:.2f}")
+        draw_text_top_left_height(image, f"FPS: {fps:.2f}")
 
         # Showing image
-        cv.imshow("Camera", image)
+        cv.imshow("Object Detection", image)
 
     key = cv.waitKey(1)
     # Press esc to stop the execution
@@ -150,9 +189,15 @@ while True:
         if model_idx != 3:
             model_idx = 3
             load_model = True
+    elif key == ord("5"):
+        if model_idx != 2:
+            model_idx = 4
+            load_model = True
     elif key == ord("l"):
         tflite = not tflite
         load_model = True
+    elif key == ord("s"):
+        non_max = not non_max
 
 cv.destroyAllWindows()
 cam.release()
