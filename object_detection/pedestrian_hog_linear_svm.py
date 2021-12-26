@@ -12,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import cv2 as cv
 import numpy as np
 from imutils.object_detection import non_max_suppression
-from utils import plot_text_top_left_height, getFPS
+from utils import draw_text_top_left_height, getFPS
 
 # Selecting our camera
 device = 0

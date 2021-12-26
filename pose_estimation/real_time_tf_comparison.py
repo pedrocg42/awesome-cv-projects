@@ -13,22 +13,20 @@ sys.path.append(os.path.dirname(dir_path))
 import cv2 as cv
 import numpy as np
 import tensorflow as tf
+import tensorflow_hub as hub
 from utils import (
     convert_saved_model_tflite,
     download_model_tf_hub,
     getFPS,
     load_tflite_model,
-    draw_raw_object_detection_output,
-    draw_text_top_left_height,
     predict_tflite_model,
-    OBJECT_DETECTION_LABELS_COCO_2017,
+    draw_text_top_left_height,
+    draw_skel_and_kp,
+    unprocess_keypoint_coords,
 )
 
 # load tflite model (press 'l' to switch)
-tflite = True
-
-# use non-max suppression (press 's' to switch)
-non_max = True
+tflite = False
 
 # Selecting our camera
 device = 0
@@ -45,52 +43,31 @@ cv.namedWindow("Object Detection", cv.WINDOW_NORMAL)
 BUFFER_SIZE = 100
 times = np.zeros(BUFFER_SIZE)
 
-model_idx = 1
+model_idx = 0
 models = [
     # Load this model pressing number 1 in your keyboard
     {
-        "name": "centernet512",
-        "model_path": "centernet_resnet50v1_fpn_512x512",
-        "hub_path": "https://tfhub.dev/tensorflow/centernet/resnet50v1_fpn_512x512/1",
-        "input_shape": (512, 512),
-        "threshold": 0.2,
-        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
+        "name": "singlepose-lightning",
+        "model_path": "movenet_singlepose_lightning_4",
+        "hub_path": "https://tfhub.dev/google/movenet/singlepose/lightning/4",
+        "input_shape": (192, 192),
+        "threshold": 0.5,
     },
     # Load this model pressing number 2 in your keyboard, load  by default
     {
-        "name": "ssd320",
-        "model_path": "ssd_mobilenet_v2",
-        "hub_path": "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/2",
-        "input_shape": (320, 320),
-        "threshold": 0.4,
-        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
+        "name": "singlepose-thunder",
+        "model_path": "movenet_singlepose_thunder_4",
+        "hub_path": "https://tfhub.dev/google/movenet/singlepose/thunder/4",
+        "input_shape": (256, 256),
+        "threshold": 0.5,
     },
     # Load this model pressing number 3 in your keyboard, load  by default
     {
-        "name": "ssd320fpn",
-        "model_path": "ssd_mobilenet_v2_fpnlite_320x320_1",
-        "hub_path": "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/fpnlite_320x320/1",
-        "input_shape": (320, 320),
-        "threshold": 0.2,
-        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
-    },
-    # Load this model pressing number 4in your keyboard
-    {
-        "name": "ssd640fpn",
-        "model_path": "ssd_mobilenet_v2_fpnlite_640x640_1",
-        "hub_path": "https://tfhub.dev/tensorflow/ssd_mobilenet_v2/fpnlite_640x640/1",
-        "input_shape": (640, 640),
-        "threshold": 0.2,
-        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
-    },
-    # Load this model pressing number 5 in your keyboard
-    {
-        "name": "faster-rcnn",
-        "model_path": "faster_rcnn_resnet50_v1_640x640",
-        "hub_path": "https://tfhub.dev/tensorflow/faster_rcnn/resnet50_v1_640x640/1",
-        "input_shape": (640, 640),
-        "threshold": 0.2,
-        "classes_dict": OBJECT_DETECTION_LABELS_COCO_2017,
+        "name": "multipose-lightning",
+        "model_path": "movenet_multipose_lightning_4",
+        "hub_path": "https://tfhub.dev/google/movenet/multipose/lightning/1",
+        "input_shape": (256, 256),
+        "threshold": 0.5,
     },
 ]
 load_model = True
@@ -112,6 +89,7 @@ while True:
                 model = download_model_tf_hub(models[model_idx], dir_path=dir_path)
             else:
                 model = tf.saved_model.load(saved_model_path)
+            movenet = model.signatures["serving_default"]
         else:
             print("Loading tflite model...")
             tflite_model_path = f"{saved_model_path}.tflite"
@@ -137,33 +115,34 @@ while True:
 
     if ret:
         # preprocessing image
-        inference_image = cv.resize(
-            image, input_shape, interpolation=cv.INTER_CUBIC
-        ).reshape((1, input_shape[0], input_shape[1], 3))
+        inference_image = tf.expand_dims(image, axis=0)
+        inference_image = tf.cast(
+            tf.image.resize(inference_image, input_shape), dtype=tf.int32
+        )
 
         # inference
         if not tflite:
-            output = model(inference_image)
-            # extracting results
-            raw_scores = output["detection_scores"].numpy()[0]
-            raw_classes = output["detection_classes"].numpy().astype(int)[0]
-            raw_boxes = output["detection_boxes"].numpy()[0]
+            output = movenet(inference_image)
         else:
             output = predict_tflite_model(tflite_model, inference_image)
-            # extracting results
-            raw_scores = output[6][0]
-            raw_classes = output[5].astype(int)[0]
-            raw_boxes = output[4][0]
+
+        # unprocessing output
+        output = tf.squeeze(output["output_0"], axis=0).numpy()
+        instance_scores = np.ones(len(output))
+        keypoint_scores = output[:, :, 2]
+        keypoint_coords = output[:, :, :2]
+        keypoint_coords = unprocess_keypoint_coords(
+            keypoint_coords, image.shape[:2], input_shape
+        )
 
         # plotting results in image
-        image = draw_raw_object_detection_output(
+        image = draw_skel_and_kp(
             image,
-            raw_scores,
-            raw_classes,
-            raw_boxes,
-            threshold=models[model_idx]["threshold"],
-            class_dict=models[model_idx]["classes_dict"],
-            non_max=non_max,
+            instance_scores=instance_scores,
+            keypoint_scores=keypoint_scores,
+            keypoint_coords=keypoint_coords,
+            min_pose_score=0.5,
+            min_part_score=0.5,
         )
 
         # Getting and printing FPS
@@ -174,7 +153,7 @@ while True:
         cv.imshow("Object Detection", image)
 
     key = cv.waitKey(1)
-    # press esc to stop the execution
+    # Press esc to stop the execution
     if key == 27:
         break
     elif key == ord("1"):
@@ -188,10 +167,6 @@ while True:
     elif key == ord("3"):
         if model_idx != 2:
             model_idx = 2
-            load_model = True
-    elif key == ord("4"):
-        if model_idx != 3:
-            model_idx = 3
             load_model = True
     elif key == ord("5"):
         if model_idx != 2:
